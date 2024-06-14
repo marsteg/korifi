@@ -40,12 +40,16 @@ func NewAppEnvBuilder(k8sClient client.Client) *AppEnvBuilder {
 }
 
 func (b *AppEnvBuilder) Build(ctx context.Context, cfApp *korifiv1alpha1.CFApp) ([]corev1.EnvVar, error) {
-	var appEnvSecret, vcapServicesSecret, vcapApplicationSecret corev1.Secret
+	var appEnvSecret, revg, vcapServicesSecret, vcapApplicationSecret corev1.Secret
 
 	if cfApp.Spec.EnvSecretName != "" {
 		err := b.k8sClient.Get(ctx, types.NamespacedName{Namespace: cfApp.Namespace, Name: cfApp.Spec.EnvSecretName}, &appEnvSecret)
 		if err != nil {
 			return nil, fmt.Errorf("error when trying to fetch app env Secret %s/%s: %w", cfApp.Namespace, cfApp.Spec.EnvSecretName, err)
+		}
+		err = b.k8sClient.Get(ctx, types.NamespacedName{Namespace: cfApp.Namespace, Name: "running-environment-variable-group"}, &revg)
+		if err != nil {
+			return nil, fmt.Errorf("error when trying to fetch running-environment-variable-group %s/%s: %w", cfApp.Namespace, "running-environment-variable-group", err)
 		}
 	}
 
@@ -64,7 +68,7 @@ func (b *AppEnvBuilder) Build(ctx context.Context, cfApp *korifiv1alpha1.CFApp) 
 	}
 
 	// We explicitly order the vcapServicesSecret last so that its "VCAP_*" contents win
-	return sortEnvVars(envVarsFromSecrets(appEnvSecret, vcapServicesSecret, vcapApplicationSecret)), nil
+	return sortEnvVars(envVarsFromSecrets(appEnvSecret, revg, vcapServicesSecret, vcapApplicationSecret)), nil
 }
 
 func sortEnvVars(envVars []corev1.EnvVar) []corev1.EnvVar {
