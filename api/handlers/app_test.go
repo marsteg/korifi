@@ -55,6 +55,7 @@ var _ = Describe("App", func() {
 		spaceRepo = new(fake.CFSpaceRepository)
 		packageRepo = new(fake.CFPackageRepository)
 		requestValidator = new(fake.RequestValidator)
+		podRepo := new(fake.PodRepository)
 
 		apiHandler := NewApp(
 			*serverURL,
@@ -67,6 +68,7 @@ var _ = Describe("App", func() {
 			spaceRepo,
 			packageRepo,
 			requestValidator,
+			podRepo,
 		)
 
 		appRecord = repositories.AppRecord{
@@ -1769,6 +1771,113 @@ var _ = Describe("App", func() {
 					MatchJSONPath("$.errors[0].title", Equal("CF-ResourceNotFound")),
 					MatchJSONPath("$.errors[0].code", BeEquivalentTo(10010)),
 				)))
+			})
+		})
+	})
+
+	Describe("DELETE /v3/apps/:guid/processes/:process/instances/:instance", func() {
+		When("the app has a single instance in the default (web) process", func() {
+			BeforeEach(func() {
+				processRepo.ListProcessesReturns([]repositories.ProcessRecord{
+					{
+						GUID:             "process-1-guid",
+						SpaceGUID:        spaceGUID,
+						AppGUID:          appGUID,
+						Type:             "web",
+						DesiredInstances: 1,
+					},
+				}, nil)
+				req = createHttpRequest("DELETE", "/v3/apps/"+appGUID+"/processes/web/instances/0", nil)
+			})
+
+			It("restarts the instance", func() {
+				Expect(rr).To(HaveHTTPStatus(http.StatusNoContent))
+				_, actualAuthInfo, _ := appRepo.GetAppArgsForCall(0)
+				Expect(actualAuthInfo).To(Equal(authInfo))
+			})
+		})
+		When("the app has a single instance in a non-default process", func() {
+			BeforeEach(func() {
+				req = createHttpRequest("DELETE", "/v3/apps/"+appGUID+"/processes/worker/instances/0", nil)
+				processRepo.ListProcessesReturns([]repositories.ProcessRecord{
+					{
+						GUID:             "process-1-guid",
+						SpaceGUID:        spaceGUID,
+						AppGUID:          appGUID,
+						Type:             "worker",
+						DesiredInstances: 1,
+					},
+				}, nil)
+			})
+
+			It("restarts the instance", func() {
+				Expect(rr).To(HaveHTTPStatus(http.StatusNoContent))
+				_, actualAuthInfo, _ := appRepo.GetAppArgsForCall(0)
+				Expect(actualAuthInfo).To(Equal(authInfo))
+			})
+		})
+		When("the app does not exist", func() {
+			BeforeEach(func() {
+				req = createHttpRequest("DELETE", "/v3/apps/boom/processes/web/instances/0", nil)
+				appRepo.GetAppReturns(repositories.AppRecord{}, apierrors.NewForbiddenError(nil, repositories.AppResourceType))
+			})
+
+			It("returns an error", func() {
+				expectNotFoundError("App")
+			})
+		})
+		When("the app exists but the process does not", func() {
+			BeforeEach(func() {
+				req = createHttpRequest("DELETE", "/v3/apps/"+appGUID+"/processes/bob/instances/0", strings.NewReader("{}"))
+			})
+
+			It("returns an error", func() {
+				expectNotFoundError("Process")
+			})
+		})
+		When("the app exists and process exist but instance does not", func() {
+			BeforeEach(func() {
+				processRepo.ListProcessesReturns([]repositories.ProcessRecord{
+					{
+						GUID:             "process-1-guid",
+						SpaceGUID:        spaceGUID,
+						AppGUID:          appGUID,
+						Type:             "boom",
+						DesiredInstances: 1,
+					},
+				}, nil)
+				req = createHttpRequest("DELETE", "/v3/apps/"+appGUID+"/processes/boom/instances/2", strings.NewReader("{}"))
+			})
+
+			It("returns an error", func() {
+				expectNotFoundError("Instance 2 of process boom")
+			})
+		})
+		When("the app exists and has more than one process", func() {
+			BeforeEach(func() {
+				req = createHttpRequest("DELETE", "/v3/apps/"+appGUID+"/processes/foo/instances/1", strings.NewReader("{}"))
+				processRepo.ListProcessesReturns([]repositories.ProcessRecord{
+					{
+						GUID:             "process-1-guid",
+						SpaceGUID:        spaceGUID,
+						AppGUID:          appGUID,
+						Type:             "boom",
+						DesiredInstances: 1,
+					},
+					{
+						GUID:             "process-2-guid",
+						SpaceGUID:        spaceGUID,
+						AppGUID:          appGUID,
+						Type:             "foo",
+						DesiredInstances: 2,
+					},
+				}, nil)
+			})
+
+			It("restarts the instance", func() {
+				Expect(rr).To(HaveHTTPStatus(http.StatusNoContent))
+				_, actualAuthInfo, _ := appRepo.GetAppArgsForCall(0)
+				Expect(actualAuthInfo).To(Equal(authInfo))
 			})
 		})
 	})

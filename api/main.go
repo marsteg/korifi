@@ -280,6 +280,7 @@ func main() {
 			spaceRepo,
 			packageRepo,
 			requestValidator,
+			podRepo,
 		),
 		handlers.NewRoute(
 			*serverURL,
@@ -318,6 +319,8 @@ func main() {
 			processRepo,
 			processStats,
 			requestValidator,
+			appRepo,
+			podRepo,
 		),
 		handlers.NewDomain(
 			*serverURL,

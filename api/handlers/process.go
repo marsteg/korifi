@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"code.cloudfoundry.org/korifi/api/actions"
 	"code.cloudfoundry.org/korifi/api/authorization"
@@ -18,11 +20,12 @@ import (
 )
 
 const (
-	ProcessPath         = "/v3/processes/{guid}"
-	ProcessSidecarsPath = "/v3/processes/{guid}/sidecars"
-	ProcessScalePath    = "/v3/processes/{guid}/actions/scale"
-	ProcessStatsPath    = "/v3/processes/{guid}/stats"
-	ProcessesPath       = "/v3/processes"
+	ProcessPath                = "/v3/processes/{guid}"
+	ProcessSidecarsPath        = "/v3/processes/{guid}/sidecars"
+	ProcessScalePath           = "/v3/processes/{guid}/actions/scale"
+	ProcessStatsPath           = "/v3/processes/{guid}/stats"
+	ProcessesPath              = "/v3/processes"
+	ProcessInstanceRestartPath = "/v3/processes/{guid}/instances/{instanceID}"
 )
 
 //counterfeiter:generate -o fake -fake-name CFProcessRepository . CFProcessRepository
@@ -45,6 +48,8 @@ type Process struct {
 	processRepo      CFProcessRepository
 	processStats     ProcessStats
 	requestValidator RequestValidator
+	podRepo          PodRepository
+	appRepo          CFAppRepository
 }
 
 func NewProcess(
@@ -52,12 +57,16 @@ func NewProcess(
 	processRepo CFProcessRepository,
 	processStatsFetcher ProcessStats,
 	requestValidator RequestValidator,
+	appRepo CFAppRepository,
+	podRepo PodRepository,
 ) *Process {
 	return &Process{
 		serverURL:        serverURL,
 		processRepo:      processRepo,
 		processStats:     processStatsFetcher,
 		requestValidator: requestValidator,
+		appRepo:          appRepo,
+		podRepo:          podRepo,
 	}
 }
 
@@ -73,6 +82,44 @@ func (h *Process) get(r *http.Request) (*routing.Response, error) {
 	}
 
 	return routing.NewResponse(http.StatusOK).WithBody(presenter.ForProcess(process, h.serverURL)), nil
+}
+
+func (h *Process) restartProcessInstance(r *http.Request) (*routing.Response, error) {
+	authInfo, _ := authorization.InfoFromContext(r.Context())
+	logger := logr.FromContextOrDiscard(r.Context()).WithName("handlers.process.delete")
+
+	processGUID := routing.URLParam(r, "guid")
+	instanceID := routing.URLParam(r, "instanceID")
+
+	process, err := h.processRepo.GetProcess(r.Context(), authInfo, processGUID)
+	if err != nil {
+		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "Failed to fetch process from Kubernetes", "Process GUID", processGUID)
+	}
+	if process.AppGUID == "" {
+		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "Failed to fetch process from Kubernetes", "Process GUID", processGUID)
+	}
+	app, err := h.appRepo.GetApp(r.Context(), authInfo, process.AppGUID)
+	if err != nil {
+		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "Failed to fetch app from Kubernetes", "AppGUID", process.AppGUID)
+	}
+	instance, err := strconv.Atoi(instanceID)
+	if err != nil {
+		return nil, apierrors.LogAndReturn(logger, err, "Instance is not a string", "InstanceID", instanceID)
+	}
+	if process.DesiredInstances <= instance {
+		msg := fmt.Sprintf("Instance %d of process %s", instance, process.Type)
+		err = errors.New(msg + "not found")
+		return nil, apierrors.LogAndReturn(logger,
+			apierrors.NewNotFoundError(err, msg), "Instance not found", "AppGUID", process.AppGUID, "InstanceID", instanceID, "Process", process.Type)
+	}
+
+	err = h.podRepo.DeletePod(r.Context(), authInfo, app, instanceID, process.Type)
+	if err != nil {
+		return nil, apierrors.LogAndReturn(logger, apierrors.ForbiddenAsNotFound(err), "Failed to restart instance", "AppGUID", process.AppGUID, "InstanceID", instanceID, "Process", process.Type)
+	}
+
+	return routing.NewResponse(http.StatusNoContent), nil
+
 }
 
 func (h *Process) getSidecars(r *http.Request) (*routing.Response, error) {
@@ -199,5 +246,6 @@ func (h *Process) AuthenticatedRoutes() []routing.Route {
 		{Method: "GET", Pattern: ProcessStatsPath, Handler: h.getStats},
 		{Method: "GET", Pattern: ProcessesPath, Handler: h.list},
 		{Method: "PATCH", Pattern: ProcessPath, Handler: h.update},
+		{Method: "DELETE", Pattern: ProcessInstanceRestartPath, Handler: h.restartProcessInstance},
 	}
 }

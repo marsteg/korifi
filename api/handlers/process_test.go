@@ -23,18 +23,24 @@ var _ = Describe("Process", func() {
 		processRepo      *fake.CFProcessRepository
 		processStats     *fake.ProcessStats
 		requestValidator *fake.RequestValidator
+		appRepo          *fake.CFAppRepository
+		podRepo          *fake.PodRepository
 	)
 
 	BeforeEach(func() {
 		processRepo = new(fake.CFProcessRepository)
 		processStats = new(fake.ProcessStats)
 		requestValidator = new(fake.RequestValidator)
+		appRepo = new(fake.CFAppRepository)
+		podRepo = new(fake.PodRepository)
 
 		apiHandler := NewProcess(
 			*serverURL,
 			processRepo,
 			processStats,
 			requestValidator,
+			appRepo,
+			podRepo,
 		)
 		routerBuilder.LoadRoutes(apiHandler)
 	})
@@ -452,6 +458,81 @@ var _ = Describe("Process", func() {
 			It("returns an error", func() {
 				expectUnknownError()
 			})
+		})
+	})
+
+	Describe("DELETE /v3/processes/:guid/instances/:instance", func() {
+		When("the instance and process are found", func() {
+			BeforeEach(func() {
+				processRepo.GetProcessReturns(repositories.ProcessRecord{
+					GUID:             "process-guid",
+					AppGUID:          "app-guid",
+					SpaceGUID:        "space-guid",
+					DesiredInstances: 2,
+					Type:             "web",
+				}, nil)
+
+				appRepo.GetAppReturns(repositories.AppRecord{
+					GUID:      "app-guid",
+					SpaceGUID: "space-guid",
+					Revision:  "revision",
+				}, nil)
+
+			})
+
+			JustBeforeEach(func() {
+				req, err := http.NewRequestWithContext(ctx, "DELETE", "/v3/processes/process-guid/instances/1", strings.NewReader("the-json-body"))
+				Expect(err).NotTo(HaveOccurred())
+				routerBuilder.Build().ServeHTTP(rr, req)
+			})
+
+			It("restarts the instance", func() {
+				Expect(rr).To(HaveHTTPStatus(http.StatusNoContent))
+				_, actualAuthInfo, _ := appRepo.GetAppArgsForCall(0)
+				Expect(actualAuthInfo).To(Equal(authInfo))
+			})
+		})
+		When("the instance is not found", func() {
+			BeforeEach(func() {
+				processRepo.GetProcessReturns(repositories.ProcessRecord{
+					GUID:             "process-guid",
+					AppGUID:          "app-guid",
+					SpaceGUID:        "space-guid",
+					DesiredInstances: 2,
+					Type:             "web",
+				}, nil)
+
+				appRepo.GetAppReturns(repositories.AppRecord{
+					GUID:      "app-guid",
+					SpaceGUID: "space-guid",
+					Revision:  "revision",
+				}, nil)
+
+			})
+			JustBeforeEach(func() {
+				req, err := http.NewRequestWithContext(ctx, "DELETE", "/v3/processes/process-guid/instances/5", strings.NewReader("the-json-body"))
+				Expect(err).NotTo(HaveOccurred())
+				routerBuilder.Build().ServeHTTP(rr, req)
+			})
+			It("returns an error", func() {
+				expectNotFoundError("Instance 5 of process web")
+			})
+		})
+	})
+	When("the process is not found", func() {
+		BeforeEach(func() {
+			processRepo.GetProcessReturns(repositories.ProcessRecord{}, apierrors.NewForbiddenError(errors.New("access denied or something"), repositories.ProcessResourceType))
+
+		})
+
+		JustBeforeEach(func() {
+			req, err := http.NewRequestWithContext(ctx, "DELETE", "/v3/processes/process-guid/instances/1", strings.NewReader("the-json-body"))
+			Expect(err).NotTo(HaveOccurred())
+			routerBuilder.Build().ServeHTTP(rr, req)
+		})
+
+		It("returns a not found error", func() {
+			expectNotFoundError("Process")
 		})
 	})
 })

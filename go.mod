@@ -51,6 +51,7 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/distribution/reference v0.6.0 // indirect
+	github.com/evanphx/json-patch v5.9.0+incompatible // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/hashicorp/golang-lru/arc/v2 v2.0.5 // indirect

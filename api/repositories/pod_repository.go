@@ -14,7 +14,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
+	labels "k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -45,6 +45,49 @@ func (r *PodRepo) listPods(ctx context.Context, authInfo authorization.Info, lis
 	}
 
 	return podList.Items, nil
+}
+
+func (r *PodRepo) DeletePod(ctx context.Context, authInfo authorization.Info, app AppRecord, instanceID string, processType string) error {
+	labelSelector, err := labels.ValidatedSelectorFromSet(map[string]string{
+		"korifi.cloudfoundry.org/app-guid":     app.GUID,
+		"korifi.cloudfoundry.org/version":      app.Revision,
+		"korifi.cloudfoundry.org/process-type": processType,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to build labelSelector: %w", apierrors.FromK8sError(err, PodResourceType))
+	}
+	listOpts := client.ListOptions{Namespace: app.SpaceGUID, LabelSelector: labelSelector}
+
+	// find the pod name from the app
+	pods, err := r.listPods(ctx, authInfo, listOpts)
+	if err != nil {
+		return fmt.Errorf("failed to list pods: %w", apierrors.FromK8sError(err, PodResourceType))
+	}
+	if len(pods) == 0 {
+		return fmt.Errorf("no pods found for app and process: %w", apierrors.FromK8sError(err, PodResourceType))
+	}
+	pod := corev1.Pod{}
+	for _, p := range pods {
+		if strings.HasSuffix(p.ObjectMeta.Name, instanceID) {
+			// delete the pod
+			pod = p
+			break
+		}
+	}
+	if pod.Labels["korifi.cloudfoundry.org/process-type"] != processType {
+		return fmt.Errorf("process not found: %w", apierrors.FromK8sError(err, PodResourceType))
+	}
+
+	userClient, err := r.userClientFactory.BuildClient(authInfo)
+	if err != nil {
+		return fmt.Errorf("failed to build user client: %w", err)
+	}
+
+	err = userClient.Delete(ctx, &pod)
+	if err != nil {
+		return fmt.Errorf("failed to 'delete' pod: %w", apierrors.FromK8sError(err, PodResourceType))
+	}
+	return nil
 }
 
 type RuntimeLogsMessage struct {
